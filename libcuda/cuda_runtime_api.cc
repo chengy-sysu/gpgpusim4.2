@@ -133,16 +133,16 @@
 #if (CUDART_VERSION < 8000)
 #include "__cudaFatFormat.h"
 #endif
-#include "gpgpu_context.h"
-#include "cuda_api_object.h"
-#include "../src/gpgpu-sim/gpu-sim.h"
-#include "../src/cuda-sim/ptx_loader.h"
+#include "../src/abstract_hardware_model.h"
 #include "../src/cuda-sim/cuda-sim.h"
 #include "../src/cuda-sim/ptx_ir.h"
+#include "../src/cuda-sim/ptx_loader.h"
 #include "../src/cuda-sim/ptx_parser.h"
+#include "../src/gpgpu-sim/gpu-sim.h"
 #include "../src/gpgpusim_entrypoint.h"
 #include "../src/stream_manager.h"
-#include "../src/abstract_hardware_model.h"
+#include "cuda_api_object.h"
+#include "gpgpu_context.h"
 
 #include <pthread.h>
 #include <semaphore.h>
@@ -464,7 +464,7 @@ static int get_app_cuda_version() {
       " | grep libcudart.so | sed  's/.*libcudart.so.\\(.*\\) =>.*/\\1/' > " +
       fname;
   int res = system(app_cuda_version_command.c_str());
-  if(res == -1){
+  if (res == -1) {
     printf("Error - Cannot detect the app's CUDA version.\n");
     exit(1);
   }
@@ -1421,7 +1421,9 @@ cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlagsInternal(
     dim3 gridDim(context->get_device()->get_gpgpu()->max_cta_per_core() *
                  context->get_device()->get_gpgpu()->get_config().num_shader());
     dim3 blockDim(blockSize);
-    kernel_info_t result(gridDim, blockDim, entry);
+    // because this fuction is only checking for resource requirements, we do
+    // not care which stream this kernel runs at, just picked -1
+    kernel_info_t result(gridDim, blockDim, entry, -1);
     // if(entry == NULL){
     //	*numBlocks = 1;
     //	return g_last_cudaError = cudaErrorUnknown;
@@ -3239,8 +3241,8 @@ char *readfile(const std::string filename) {
   // allocate and copy the entire ptx
   char *ret = (char *)malloc((filesize + 1) * sizeof(char));
   int num = fread(ret, 1, filesize, fp);
-  if(num == 0){
-        std::cout << "ERROR: Could not read data from file %s\n"
+  if (num == 0) {
+    std::cout << "ERROR: Could not read data from file %s\n"
               << filename << std::endl;
     assert(0);
   }
