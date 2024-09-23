@@ -248,7 +248,15 @@ class OptionParser {
 
     // open config file, stream every line into a continuous buffer
     // get rid of comments in the process
-    inputFile.open(filename);
+    printf("%s\n", filename);
+
+    if (strcmp(filename, "gpgpusim.config") == 0)
+    {
+      inputFile.open("/root/gpgpu-sim_accel/configs/tested-cfgs/SM7_QV100/gpgpusim.config");
+      printf("[CGY][config] Using Config of SM_QV100\n");
+    }
+    else
+      inputFile.open(filename);
     if (!inputFile.good()) {
       fprintf(stderr, "\n\nGPGPU-Sim ** ERROR: Cannot open config file '%s'\n",
               filename);

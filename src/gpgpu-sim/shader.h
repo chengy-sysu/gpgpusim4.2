@@ -99,6 +99,7 @@ class thread_ctx_t {
   bool m_active;
 };
 
+// 每个shader有一个shd_warp_t集合
 class shd_warp_t {
  public:
   shd_warp_t(class shader_core_ctx *shader, unsigned warp_size)
@@ -117,6 +118,7 @@ class shd_warp_t {
     m_n_atomic = 0;
     m_membar = false;
     m_done_exit = true;
+    m_scheduled = false;
     m_last_fetch = 0;
     m_next = 0;
 
@@ -150,6 +152,7 @@ class shd_warp_t {
     n_completed -= active.count();  // active threads are not yet completed
     m_active_threads = active;
     m_done_exit = false;
+    m_scheduled = false;
 
     // Jin: cdp support
     m_cdp_latency = 0;
@@ -176,6 +179,9 @@ class shd_warp_t {
 
   bool done_exit() const { return m_done_exit; }
   void set_done_exit() { m_done_exit = true; }
+
+  bool scheduled() const { return m_scheduled; }
+  void set_scheduled() { m_scheduled = true; }
 
   void print(FILE *fout) const;
   void print_ibuffer(FILE *fout) const;
@@ -305,6 +311,8 @@ class shd_warp_t {
 
   bool m_done_exit;  // true once thread exit has been registered for threads in
                      // this warp
+
+  bool m_scheduled; // 如果这个warp已经被第一次调度过，设置为true 
 
   unsigned long long m_last_fetch;
 
@@ -2483,6 +2491,7 @@ class shader_core_ctx : public core_t {
   unsigned m_n_active_cta;  // number of Cooperative Thread Arrays (blocks)
                             // currently running on this shader.
   unsigned m_cta_status[MAX_CTA_PER_SHADER];  // CTAs status
+  unsigned m_cta_ctaid[MAX_CTA_PER_SHADER]; // 记录CTA的全局编号
   unsigned m_not_completed;  // number of threads to be completed (==0 when all
                              // thread on this core completed)
   std::bitset<MAX_THREAD_PER_SM> m_active_threads;

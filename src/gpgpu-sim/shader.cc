@@ -569,7 +569,10 @@ void shader_core_ctx::init_warps(unsigned cta_id, unsigned start_thread,
         }
         start_pc = pc;
       }
-
+      // 打印warp初始化的时间
+      // TODO：打印warp第一条指令被执行的时间
+      printf("[CGY][warp init] cta %d sid %d d_wid %d init_cycle %lld\n", ctaid, m_sid, m_dynamic_warp_id, 
+      m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
       m_warp[i]->init(start_pc, cta_id, i, active_threads, m_dynamic_warp_id);
       ++m_dynamic_warp_id;
       m_not_completed += n_active;
@@ -916,39 +919,65 @@ void shader_core_ctx::decode() {
 }
 
 void shader_core_ctx::fetch() {
+  // 如果i_buffer中没有有效指令，则warp可以获取指令
   if (!m_inst_fetch_buffer.m_valid) {
-    if (m_L1I->access_ready()) {
+    if (m_L1I->access_ready()) { // 如果L1 cache得到了一条之前Miss的指令，优先fetch，否则轮询
       mem_fetch *mf = m_L1I->next_access();
+      // m_warp是一个warp实例数组，根据warp_id访问
       m_warp[mf->get_wid()]->clear_imiss_pending();
+      // 构造一条i_buffer条目，pc值、size、warp_id
       m_inst_fetch_buffer =
           ifetch_buffer_t(m_warp[mf->get_wid()]->get_pc(),
                           mf->get_access_size(), mf->get_wid());
+      // 当前warp的pc值应当是request的地址
       assert(m_warp[mf->get_wid()]->get_pc() ==
              (mf->get_addr() -
               PROGRAM_MEM_START));  // Verify that we got the instruction we
                                     // were expecting.
       m_inst_fetch_buffer.m_valid = true;
       m_warp[mf->get_wid()]->set_last_fetch(m_gpu->gpu_sim_cycle);
+      // 之前miss了
+      //printf("[CGY][FETCH] warp %d get hit response(pc = 0x%x) at cycle %d\n",
+      //        mf->get_wid(), m_warp[mf->get_wid()]->get_pc(), m_gpu->gpu_sim_cycle);
       delete mf;
     } else {
+        // 查看所有warp有没有已经完成了的
+      /*for (unsigned i = 0; i < m_config->max_warps_per_shader; i++) {
+        if (m_warp[i]->done_exit()) continue;
+        if (m_warp[i]->hardware_done() &&
+                !m_scoreboard->pendingWrites(i) &&
+                !m_warp[i]->done_exit()) {
+
+                }
+      }*/
+
       // find an active warp with space in instruction buffer that is not
       // already waiting on a cache miss and get next 1-2 instructions from
       // i-cache...
+      // 轮询所有warp
       for (unsigned i = 0; i < m_config->max_warps_per_shader; i++) {
+        // 一般m_warp.size()和m_config->max_warps_per_shader是相同的
+        //printf("%d %d\n", m_config->max_warps_per_shader, m_warp.size());
+        // m_last_warp_fetched是最后fetch的warp_id
         unsigned warp_id =
             (m_last_warp_fetched + 1 + i) % m_config->max_warps_per_shader;
 
         // this code checks if this warp has finished executing and can be
         // reclaimed
+        
+        // 若执行完毕且记分牌里没有pending
         if (m_warp[warp_id]->hardware_done() &&
             !m_scoreboard->pendingWrites(warp_id) &&
             !m_warp[warp_id]->done_exit()) {
           bool did_exit = false;
+          // 遍历这个warp的所有线程，把所有active的设成non—active
           for (unsigned t = 0; t < m_config->warp_size; t++) {
             unsigned tid = warp_id * m_config->warp_size + t;
             if (m_threadState[tid].m_active == true) {
               m_threadState[tid].m_active = false;
+              // 得到warp执行的线程块id
               unsigned cta_id = m_warp[warp_id]->get_cta_id();
+              // 更新活动线程块的状态，有新的线程完成了
               if (m_thread[tid] == NULL) {
                 register_cta_thread_exit(cta_id, m_warp[warp_id]->get_kernel_info());
               } else {
@@ -960,13 +989,22 @@ void shader_core_ctx::fetch() {
               did_exit = true;
             }
           }
+
+          if (did_exit) 
+          {
+            printf("[CGY][warp exit] cta: %d sid: %d d_wid: %d finish cycle %lld\n", m_cta_ctaid[m_warp[warp_id]->get_cta_id()], m_sid, 
+                   m_warp[warp_id]->get_dynamic_warp_id(), m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle); 
+          }
+          // 如果没有did_exit，说明这个warp之前已经done_exit过了（？
           if (did_exit) m_warp[warp_id]->set_done_exit();
           --m_active_warps;
           assert(m_active_warps >= 0);
         }
 
         // this code fetches instructions from the i-cache or generates memory
+        // 硬件done包括 functional_done() && stores_done() && !inst_in_pipeline();
         if (!m_warp[warp_id]->functional_done() &&
+        // 这个warp不能在等待icache miss
             !m_warp[warp_id]->imiss_pending() &&
             m_warp[warp_id]->ibuffer_empty()) {
           address_type pc;
@@ -975,37 +1013,47 @@ void shader_core_ctx::fetch() {
           unsigned nbytes = 16;
           unsigned offset_in_block =
               pc & (m_config->m_L1I_config.get_line_sz() - 1);
+          // 如果要访问的内存块超过了当前缓存行的范围，
+          // 需要调整nbytes的大小。将nbytes设置为当前缓存行剩余的字节数
           if ((offset_in_block + nbytes) > m_config->m_L1I_config.get_line_sz())
             nbytes = (m_config->m_L1I_config.get_line_sz() - offset_in_block);
 
           // TODO: replace with use of allocator
           // mem_fetch *mf = m_mem_fetch_allocator->alloc()
-          mem_access_t acc(INST_ACC_R, ppc, nbytes, false, m_gpu->gpgpu_ctx);
+          mem_access_t acc(INST_ACC_R, ppc, nbytes, false, m_gpu->gpgpu_ctx); // 构造mem_access实例
           mem_fetch *mf = new mem_fetch(
               acc, NULL /*we don't have an instruction yet*/, READ_PACKET_SIZE,
               warp_id, m_sid, m_tpc, m_memory_config,
+              // tot是至今为止的所有kernel的总周期数，后者是当前kernel
               m_gpu->gpu_tot_sim_cycle + m_gpu->gpu_sim_cycle);
           std::list<cache_event> events;
           enum cache_request_status status;
+          // 如果打开了完美icache
           if (m_config->perfect_inst_const_cache){
             status = HIT;
+            // sid是shader_id，往log里记一笔
             shader_cache_access_log(m_sid, INSTRUCTION, 0);
           }
           else
             status = m_L1I->access(
                 (new_addr_type)ppc, mf,
                 m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle, events);
-
+          // 计算地址，然后probe函数模拟cache访问去计算是否hit
+          //printf("[CGY][FETCH] sid=%d, wid=%d, pc=0x%x, cycle=%d, ", m_sid, warp_id, pc, m_gpu->gpu_sim_cycle);
           if (status == MISS) {
+            //printf("MISS\n");
             m_last_warp_fetched = warp_id;
             m_warp[warp_id]->set_imiss_pending();
             m_warp[warp_id]->set_last_fetch(m_gpu->gpu_sim_cycle);
           } else if (status == HIT) {
+            //printf("HIT\n");
             m_last_warp_fetched = warp_id;
             m_inst_fetch_buffer = ifetch_buffer_t(pc, nbytes, warp_id);
             m_warp[warp_id]->set_last_fetch(m_gpu->gpu_sim_cycle);
             delete mf;
           } else {
+            //printf("RESERVATION_FAIL\n");
+            // MISS状态下MSHR已满或者cache set中没有可替换块，则保留失败
             m_last_warp_fetched = warp_id;
             assert(status == RESERVATION_FAIL);
             delete mf;
@@ -1015,7 +1063,7 @@ void shader_core_ctx::fetch() {
       }
     }
   }
-
+  // 完成初始化操作后驱动L1 cahce
   m_L1I->cycle();
 }
 
@@ -1255,7 +1303,19 @@ void scheduler_unit::cycle() {
                              // waiting for pending register writes
   bool issued_inst = false;  // of these we issued one
 
+  // 不同调度算法的调度器各自有一个order_warps函数
+  // 得到m_next_cycle_prioritized_warps这个vector
   order_warps();
+
+  /*printf("[CGY][ISSUE] Warp Order:\n");
+  for (std::vector<shd_warp_t *>::const_iterator iter =
+           m_next_cycle_prioritized_warps.begin();
+       iter != m_next_cycle_prioritized_warps.end(); iter++) {
+    if ((*iter) == NULL || (*iter)->done_exit()) {
+      continue;
+    }
+    printf("[sid=%d, wid=%d] ", this->get_sid(), (*iter)->get_warp_id());
+  }*/
   for (std::vector<shd_warp_t *>::const_iterator iter =
            m_next_cycle_prioritized_warps.begin();
        iter != m_next_cycle_prioritized_warps.end(); iter++) {
@@ -1263,20 +1323,28 @@ void scheduler_unit::cycle() {
     if ((*iter) == NULL || (*iter)->done_exit()) {
       continue;
     }
+
+    if (!(*iter)->scheduled())
+    {
+      printf("[CGY][warp first schedule] cta %d sid %d d_wid %d fs_cycle %lld\n", m_shader->m_cta_ctaid[(*iter)->get_cta_id()], m_shader->m_sid, 
+      (*iter)->get_dynamic_warp_id(), m_shader->m_gpu->gpu_sim_cycle + m_shader->m_gpu->gpu_tot_sim_cycle);
+      (*iter)->set_scheduled();
+    }
     SCHED_DPRINTF("Testing (warp_id %u, dynamic_warp_id %u)\n",
                   (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id());
     unsigned warp_id = (*iter)->get_warp_id();
     unsigned checked = 0;
     unsigned issued = 0;
+    // 先前的指令所使用的执行单元，包括SF, Tensor, Mem等
     exec_unit_type_t previous_issued_inst_exec_type = exec_unit_type_t::NONE;
-    unsigned max_issue = m_shader->m_config->gpgpu_max_insn_issue_per_warp;
+    unsigned max_issue = m_shader->m_config->gpgpu_max_insn_issue_per_warp; // 多发射
     bool diff_exec_units =
         m_shader->m_config
             ->gpgpu_dual_issue_diff_exec_units;  // In tis mode, we only allow
                                                  // dual issue to diff execution
                                                  // units (as in Maxwell and
                                                  // Pascal)
-
+    // 判断warp的ibuffer是否为空
     if (warp(warp_id).ibuffer_empty())
       SCHED_DPRINTF(
           "Warp (warp_id %u, dynamic_warp_id %u) fails as ibuffer_empty\n",
@@ -1293,6 +1361,7 @@ void scheduler_unit::cycle() {
            (issued < max_issue)) {
       const warp_inst_t *pI = warp(warp_id).ibuffer_next_inst();
       // Jin: handle cdp latency;
+      // cdp: CUDA Dynamic Parallelism
       if (pI && pI->m_is_cdp && warp(warp_id).m_cdp_latency > 0) {
         assert(warp(warp_id).m_cdp_dummy);
         warp(warp_id).m_cdp_latency--;
@@ -1303,6 +1372,11 @@ void scheduler_unit::cycle() {
       bool warp_inst_issued = false;
       unsigned pc, rpc;
       m_shader->get_pdom_stack_top_info(warp_id, pI, &pc, &rpc);
+      /*printf(
+          "[CGY] Warp (warp_id %u, dynamic_warp_id %u) has valid instruction (%s)\n",
+          (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id(),
+          m_shader->m_config->gpgpu_ctx->func_sim->ptx_get_insn_str(pc)
+              .c_str());      */
       SCHED_DPRINTF(
           "Warp (warp_id %u, dynamic_warp_id %u) has valid instruction (%s)\n",
           (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id(),
@@ -1321,6 +1395,9 @@ void scheduler_unit::cycle() {
         } else {
           valid_inst = true;
           if (!m_scoreboard->checkCollision(warp_id, pI)) {
+            /*printf(
+                "[CGY] Warp (warp_id %u, dynamic_warp_id %u) passes scoreboard at cycle=%d\n",
+                (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id(), (*iter)->get_shader()->m_gpu->gpu_sim_cycle);     */       
             SCHED_DPRINTF(
                 "Warp (warp_id %u, dynamic_warp_id %u) passes scoreboard\n",
                 (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id());
@@ -1906,13 +1983,13 @@ void shader_core_ctx::warp_inst_complete(const warp_inst_t &inst) {
     m_stats->m_num_sim_insn[m_sid] += m_config->warp_size;
   else
     m_stats->m_num_sim_insn[m_sid] += inst.active_count();
-
   m_stats->m_num_sim_winsn[m_sid]++;
   m_gpu->gpu_sim_insn += inst.active_count();
   inst.completed(m_gpu->gpu_tot_sim_cycle + m_gpu->gpu_sim_cycle);
 }
 
 void shader_core_ctx::writeback() {
+  // printf("[CGY] writeback\n"); 
   unsigned max_committed_thread_instructions =
       m_config->warp_size *
       (m_config->pipe_widths[EX_WB]);  // from the functional units
@@ -2943,8 +3020,17 @@ void ldst_unit::cycle() {
 void shader_core_ctx::register_cta_thread_exit(unsigned cta_num,
                                                kernel_info_t *kernel) {
   assert(m_cta_status[cta_num] > 0);
+  // 这个是shader级别的数组
   m_cta_status[cta_num]--;
+  // printf("[CGY]: SID %d CTA %d exits nums %d at cycle =%d\n", this->get_sid(), cta_num, m_cta_status[cta_num], m_gpu->gpu_sim_cycle);
   if (!m_cta_status[cta_num]) {
+    // 记录block的结束时间
+    printf("[CGY][block exit] kernel_name:%s cta:%2u sid:%2u exit_cycle:%lld\n", 
+      kernel->get_name().c_str(), m_cta_ctaid[cta_num], m_sid, m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle 
+      );
+    // printf("[CGY][block exit] sid %d CTA %d exits at cycle =%d\n", this->get_sid(), cta_num, m_gpu->gpu_sim_cycle);
+    //printf("[CGY]: SID =%d\n", this->get_sid());
+    // printf("[CGY] %d\n", GPGPU_Context()->clock());
     // Increment the completed CTAs
     m_stats->ctas_completed++;
     m_gpu->inc_completed_cta();
@@ -4500,6 +4586,7 @@ unsigned simt_core_cluster::get_n_active_sms() const {
 }
 
 unsigned simt_core_cluster::issue_block2core() {
+  // printf("[CGY] cycle=%d\n", m_gpu->gpu_sim_cycle);
   unsigned num_blocks_issued = 0;
   for (unsigned i = 0; i < m_config->n_simt_cores_per_cluster; i++) {
     unsigned core =
@@ -4515,6 +4602,7 @@ unsigned simt_core_cluster::issue_block2core() {
       // first select core kernel, if no more cta, get a new kernel
       // only when core completes
       kernel = m_core[core]->get_kernel();
+      // 判断这个kernel还有没有需要执行的CTA
       if (!m_gpu->kernel_more_cta_left(kernel)) {
         // wait till current kernel finishes
         if (m_core[core]->get_not_completed() == 0) {

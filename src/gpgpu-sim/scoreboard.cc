@@ -70,6 +70,8 @@ void Scoreboard::reserveRegister(unsigned wid, unsigned regnum) {
 
 // Unmark register as write-pending
 void Scoreboard::releaseRegister(unsigned wid, unsigned regnum) {
+  //printf("[CGY][Scoreboard] releaseRegister() wid = %d", wid);
+  //printf(", regnum = %d at cycle %d\n", regnum, m_gpu->gpu_sim_cycle);
   if (!(reg_table[wid].find(regnum) != reg_table[wid].end())) return;
   SHADER_DPRINTF(SCOREBOARD, "Release register - warp:%d, reg: %d\n", wid,
                  regnum);
@@ -108,15 +110,21 @@ void Scoreboard::reserveRegisters(const class warp_inst_t* inst) {
 
 // Release registers for an instruction
 void Scoreboard::releaseRegisters(const class warp_inst_t* inst) {
+  // Loop through all output registers for this instruction
   for (unsigned r = 0; r < MAX_OUTPUT_VALUES; r++) {
+    // If the register is used
     if (inst->out[r] > 0) {
+      // Print a debug message
       SHADER_DPRINTF(SCOREBOARD, "Register Released - warp:%d, reg: %d\n",
                      inst->warp_id(), inst->out[r]);
+      // Release the register
       releaseRegister(inst->warp_id(), inst->out[r]);
+      // Remove the register from the longopregs map
       longopregs[inst->warp_id()].erase(inst->out[r]);
     }
   }
 }
+
 
 /**
  * Checks to see if registers used by an instruction are reserved in the
@@ -125,8 +133,10 @@ void Scoreboard::releaseRegisters(const class warp_inst_t* inst) {
  * @return
  * true if WAW or RAW hazard (no WAR since in-order issue)
  **/
+// 检查inst和wid对应的寄存器表是否有冲突
 bool Scoreboard::checkCollision(unsigned wid, const class inst_t* inst) const {
-  // Get list of all input and output registers
+  //printf("[CGY][Scoreboard] checkCollision() wid = %d, regnum = ", wid);
+  // 获取inst的所有输入和输出寄存器
   std::set<int> inst_regs;
 
   for (unsigned iii = 0; iii < inst->outcount; iii++)
@@ -139,13 +149,16 @@ bool Scoreboard::checkCollision(unsigned wid, const class inst_t* inst) const {
   if (inst->ar1 > 0) inst_regs.insert(inst->ar1);
   if (inst->ar2 > 0) inst_regs.insert(inst->ar2);
 
-  // Check for collision, get the intersection of reserved registers and
-  // instruction registers
+  // 检查冲突，获取保留寄存器和inst寄存器的交集
   std::set<int>::const_iterator it2;
-  for (it2 = inst_regs.begin(); it2 != inst_regs.end(); it2++)
+ for (it2 = inst_regs.begin(); it2 != inst_regs.end(); it2++)
+  {
+    //printf("%d ", *it2);
     if (reg_table[wid].find(*it2) != reg_table[wid].end()) {
       return true;
     }
+  }
+  //printf("\n");
   return false;
 }
 

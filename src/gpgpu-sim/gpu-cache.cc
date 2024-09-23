@@ -1665,10 +1665,11 @@ enum cache_request_status data_cache::rd_miss_base(
 
 /// Access cache for read_only_cache: returns RESERVATION_FAIL if
 // request could not be accepted (for any reason)
-enum cache_request_status read_only_cache::access(
+enum cache_request_status read_only_cache::access( 
     new_addr_type addr, mem_fetch *mf, unsigned time,
     std::list<cache_event> &events) {
   assert(mf->get_data_size() <= m_config.get_atom_sz());
+  // 确保这个cache是只读的，这个fetch是不写的
   assert(m_config.m_write_policy == READ_ONLY);
   assert(!mf->get_is_write());
   new_addr_type block_addr = m_config.block_addr(addr);

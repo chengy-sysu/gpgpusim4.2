@@ -1704,7 +1704,7 @@ void shader_core_ctx::issue_block2core(kernel_info_t &kernel) {
     set_max_cta(kernel);
   else
     assert(occupy_shader_resource_1block(kernel, true));
-
+  // 增加这个kernel所在的SM数量
   kernel.inc_running();
 
   // find a free CTA context
@@ -1760,6 +1760,7 @@ void shader_core_ctx::issue_block2core(kernel_info_t &kernel) {
   function_info *kernel_func_info = kernel.entry();
   symbol_table *symtab = kernel_func_info->get_symtab();
   unsigned ctaid = kernel.get_next_cta_id_single();
+  m_cta_ctaid[free_cta_hw_id] = ctaid;
   checkpoint *g_checkpoint = new checkpoint();
   for (unsigned i = start_thread; i < end_thread; i++) {
     m_threadState[i].m_cta_id = free_cta_hw_id;
@@ -1806,6 +1807,21 @@ void shader_core_ctx::issue_block2core(kernel_info_t &kernel) {
   m_n_active_cta++;
 
   shader_CTA_count_log(m_sid, 1);
+  /*printf("[CGY][issue2core] sid:%d cta:%d cycle=%lld tot_cycle=%lld", m_sid, free_cta_hw_id, m_gpu->gpu_sim_cycle,
+                 m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+  printf("[CGY][issue2core] GPGPU-Sim uArch: sid:%2u cta:%2u, start_tid:%4u, end_tid:%4u, "
+                 "initialized @(cycle=%lld,tot_cycle=%lld), kernel_uid:%u, kernel_name:%s\n",
+                 m_sid, free_cta_hw_id, start_thread, end_thread, m_gpu->gpu_sim_cycle,
+                 m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle, kernel.get_uid(), kernel.get_name().c_str());*/
+
+  // 记录block issue的时间
+  // cycle使用total cycle，是包括了所有kernel的时间
+  // ctaid才是全局的CTA编号
+
+  printf("[CGY][block issue] kernel_name:%s cta:%2u sid:%2u init_cycle:%lld\n", 
+        kernel.get_name().c_str(), ctaid, m_sid, m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle 
+        );
+        
   SHADER_DPRINTF(LIVENESS,
                  "GPGPU-Sim uArch: cta:%2u, start_tid:%4u, end_tid:%4u, "
                  "initialized @(%lld,%lld), kernel_uid:%u, kernel_name:%s\n",
