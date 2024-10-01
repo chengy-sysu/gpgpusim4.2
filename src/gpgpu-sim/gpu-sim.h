@@ -721,6 +721,8 @@ class gpgpu_sim : public gpgpu_t {
   kernel_info_t *m_functional_sim_kernel;
 
  public:
+  // 获取这个gpu正在执行的kernel的uid，如果不考虑并发的话就只有一个
+  unsigned int get_executed_kernel_uids_no_Concurrency() {return m_executed_kernel_uids[0];}
   bool is_functional_sim() { return m_functional_sim; }
   kernel_info_t *get_functional_kernel() { return m_functional_sim_kernel; }
   std::vector<kernel_info_t *> get_running_kernels() {

@@ -1869,8 +1869,8 @@ void shader_core_ctx::issue_block2core(kernel_info_t &kernel) {
   // cycle使用total cycle，是包括了所有kernel的时间
   // ctaid才是全局的CTA编号
 
-  printf("[CGY][block issue] kernel_name:%s cta:%2u sid:%2u init_cycle:%lld\n", 
-        kernel.get_name().c_str(), ctaid, m_sid, m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle 
+  printf("[CGY][block issue] kernel_name:%s launch_uid:%2u cta:%2u sid:%2u init_cycle:%lld\n",  
+        kernel.get_name().c_str(), m_gpu->get_executed_kernel_uids_no_Concurrency(), ctaid, m_sid, m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle 
         );
         
   SHADER_DPRINTF(LIVENESS,
@@ -1916,8 +1916,19 @@ int gpgpu_sim::next_clock_domain(void) {
   return mask;
 }
 
+// 轮询所有的SM，能发射就发射
 void gpgpu_sim::issue_block2core() {
   unsigned last_issued = m_last_cluster_issue;
+  bool can_issue = true;
+  for (unsigned i = 0; i < m_shader_config->n_simt_clusters; i++) {
+    unsigned idx = (i + last_issued + 1) % m_shader_config->n_simt_clusters;
+    bool ok = m_cluster[idx]->can_issue_1block();
+    if (ok == false) {
+      can_issue = false;
+    }
+  }
+  // if (!can_issue) return;  
+  // 在QV100架构，每个shader_cluster就是一个SM
   for (unsigned i = 0; i < m_shader_config->n_simt_clusters; i++) {
     unsigned idx = (i + last_issued + 1) % m_shader_config->n_simt_clusters;
     unsigned num = m_cluster[idx]->issue_block2core();

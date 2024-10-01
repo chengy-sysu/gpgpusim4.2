@@ -2629,6 +2629,7 @@ class simt_core_cluster {
 
   void reinit();
   unsigned issue_block2core();
+  bool can_issue_1block();
   void cache_flush();
   void cache_invalidate();
   bool icnt_injection_buffer_full(unsigned size, bool write);

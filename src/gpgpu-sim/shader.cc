@@ -3045,8 +3045,8 @@ void shader_core_ctx::register_cta_thread_exit(unsigned cta_num,
   // printf("[CGY]: SID %d CTA %d exits nums %d at cycle =%d\n", this->get_sid(), cta_num, m_cta_status[cta_num], m_gpu->gpu_sim_cycle);
   if (!m_cta_status[cta_num]) {
     // 记录block的结束时间
-    printf("[CGY][block exit] kernel_name:%s cta:%2u sid:%2u exit_cycle:%lld\n", 
-      kernel->get_name().c_str(), m_cta_ctaid[cta_num], m_sid, m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle 
+    printf("[CGY][block exit] kernel_name:%s launch_uid:%2u cta:%2u sid:%2u exit_cycle:%lld\n", 
+      kernel->get_name().c_str(), m_gpu->get_executed_kernel_uids_no_Concurrency(), m_cta_ctaid[cta_num], m_sid, m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle 
       );
     // printf("[CGY][block exit] sid %d CTA %d exits at cycle =%d\n", this->get_sid(), cta_num, m_gpu->gpu_sim_cycle);
     //printf("[CGY]: SID =%d\n", this->get_sid());
@@ -4603,6 +4603,47 @@ unsigned simt_core_cluster::get_n_active_sms() const {
   return n;
 }
 
+bool simt_core_cluster::can_issue_1block()
+{
+  unsigned num_blocks_issued = 0;
+  for (unsigned i = 0; i < m_config->n_simt_cores_per_cluster; i++) {
+    unsigned core =
+        (i + m_cta_issue_next_core + 1) % m_config->n_simt_cores_per_cluster;
+
+    kernel_info_t *kernel;
+    // Jin: fetch kernel according to concurrent kernel setting
+    if (m_config->gpgpu_concurrent_kernel_sm) {  // concurrent kernel on sm
+      // always select latest issued kernel
+      kernel_info_t *k = m_gpu->select_kernel();
+      kernel = k;
+    } else {
+      // first select core kernel, if no more cta, get a new kernel
+      // only when core completes
+      kernel = m_core[core]->get_kernel();
+      // 判断这个kernel还有没有需要执行的CTA
+      if (!m_gpu->kernel_more_cta_left(kernel)) {
+        // wait till current kernel finishes
+        if (m_core[core]->get_not_completed() == 0) {
+          kernel_info_t *k = m_gpu->select_kernel();
+          if (k) m_core[core]->set_kernel(k);
+          kernel = k;
+        }
+      }
+    }
+
+    if (m_gpu->kernel_more_cta_left(kernel) &&
+        //            (m_core[core]->get_n_active_cta() <
+        //            m_config->max_cta(*kernel)) ) {
+        m_core[core]->can_issue_1block(*kernel)) {
+      //m_core[core]->issue_block2core(*kernel);
+      num_blocks_issued++;
+      //m_cta_issue_next_core = core;
+      break;
+    }
+  }
+  return num_blocks_issued >= 1;
+}
+
 unsigned simt_core_cluster::issue_block2core() {
   // printf("[CGY] cycle=%d\n", m_gpu->gpu_sim_cycle);
   unsigned num_blocks_issued = 0;
@@ -4638,9 +4679,11 @@ unsigned simt_core_cluster::issue_block2core() {
       m_core[core]->issue_block2core(*kernel);
       num_blocks_issued++;
       m_cta_issue_next_core = core;
+      // 这个num_blocks_issued能大于1吗?
       break;
     }
   }
+  assert(num_blocks_issued <= 1);
   return num_blocks_issued;
 }
 
