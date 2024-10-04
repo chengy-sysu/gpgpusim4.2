@@ -1927,7 +1927,7 @@ void gpgpu_sim::issue_block2core() {
       can_issue = false;
     }
   }
-  // if (!can_issue) return;  
+  if (!can_issue) return;  
   // 在QV100架构，每个shader_cluster就是一个SM
   for (unsigned i = 0; i < m_shader_config->n_simt_clusters; i++) {
     unsigned idx = (i + last_issued + 1) % m_shader_config->n_simt_clusters;
@@ -2165,15 +2165,15 @@ void gpgpu_sim::cycle() {
           shader_print_scheduler_stat(stdout, false);
       }
     }
-
-    if (!(gpu_sim_cycle % 50000)) {
+    // 50000个周期不动就触发死锁
+    /*if (!(gpu_sim_cycle % 50000)) {
       // deadlock detection
       if (m_config.gpu_deadlock_detect && gpu_sim_insn == last_gpu_sim_insn) {
         gpu_deadlock = true;
       } else {
         last_gpu_sim_insn = gpu_sim_insn;
       }
-    }
+    }*/
     try_snap_shot(gpu_sim_cycle);
     spill_log_to_file(stdout, 0, gpu_sim_cycle);
 

@@ -435,6 +435,7 @@ class gpgpu_sim_config : public power_config,
   char *gpgpu_runtime_stat;
   bool gpgpu_flush_l1_cache;
   bool gpgpu_flush_l2_cache;
+  // 指示是否要检测死锁
   bool gpu_deadlock_detect;
   int gpgpu_frfcfs_dram_sched_queue_size;
   int gpgpu_cflog_interval;
